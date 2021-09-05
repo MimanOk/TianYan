@@ -23,13 +23,13 @@ from multiprocessing import Pool as pPool
 
 
 # 线程数(同时消耗每个文件中的url数) 24
-THREAD_COUNT = 2
+THREAD_COUNT = 24
 # 进程数(一次使用的文件数) 2
 PROCESS_COUNT = 2
 # 线程池缓冲数(线程流畅度) 10
-THREAD_P_WAIT_COUNT = THREAD_COUNT * 2
+THREAD_P_WAIT_COUNT = THREAD_COUNT * 10
 # 进程池缓冲数(进程流畅度) 32
-PROCESS_P_WAIT_COUNT = PROCESS_COUNT * 2
+PROCESS_P_WAIT_COUNT = PROCESS_COUNT * 32
 
 # 是否使用代理
 USE_PROXY = True

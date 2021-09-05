@@ -2,9 +2,9 @@
 # Time: 2021.08.22
 __author__ = "huoyijun"
 
-import json
 import os
 import re
+import json
 import time
 import shutil
 import redis
@@ -219,7 +219,8 @@ def parse_file(file, item, t_lock):
                             formdata = {
                                 "company_name": company_name,
                                 "social_credit_id": code,
-                                "company_about": company_profile
+                                "company_about": company_profile,
+                                "shareholders_name": shareholders_name
                             }
 
                             t_lock.acquire()
