@@ -209,10 +209,10 @@ def parse_file(file, item, t_lock):
 
                             # >>>unlock
                             # 数据解析到本地
-                            t_lock.acquire()
-                            with open(os.path.join(store_path, company_name + '.txt'), 'w+', encoding='utf8') as f:
-                                f.write(data)
-                            t_lock.release()
+                            # t_lock.acquire()
+                            # with open(os.path.join(store_path, company_name + '.txt'), 'w+', encoding='utf8') as f:
+                            #     f.write(data)
+                            # t_lock.release()
                             logger.info("%s   待入库" % company_name)
 
                             # 数据解析到数据库
@@ -224,8 +224,8 @@ def parse_file(file, item, t_lock):
                             }
 
                             t_lock.acquire()
-                            item[1].append(formdata)
-                            item[0] += 1
+                            item['formdata'].append(formdata)
+                            item['crawl_count'] += 1
                             t_lock.release()
                     else:
                         logger.info("网页无字符编码")
@@ -240,7 +240,7 @@ def parse_files(file_list, p_queue):
         logger.warning("file list error")
         return None
     # 0:总解析页数，1:要插入的数据
-    item = [0, []]
+    item = {'crawl_count': 0, 'formdata': []}
 
     # 线程锁
     t_lock = tRLock()
@@ -260,26 +260,26 @@ def parse_files(file_list, p_queue):
 
     # >>>lock
     # 数据入库
-    # logger.info("数据入库中")
-    # res = requests.post(url=url_api, data=json.dumps(item[1]), headers=HEADERS).json()
-    # if res['code'] != 200:
-    #     # 保存失败数据
-    #     for comapny in json.loads(item[1]):
-    #         company_name = comapny['company_name']
-    #         t_lock.acquire()
-    #         with open(os.path.join(os.path.dirname(WORK_DIR), 'insert_fail_companies.txt'), 'a+',
-    #                   encoding='utf8') as f:
-    #             f.write(company_name + '\n')
-    #         t_lock.release()
-    #         logger.warning("%s数据插入失败，已保存至本地" % company_name)
-    #     item[1].clear()
-    #     return None
-    # item[1].clear()
-    # try:
-    #     logger.info("试存数: %s, 成功数: %s" % (item[0], res['rows_count']))
-    # except Exception as e:
-    #     logger.warning(e)
-    p_queue.put(item[0])
+    logger.info("数据入库中")
+    res = requests.post(url=url_api, data=json.dumps(item['formdata']), headers=HEADERS).json()
+    if res['code'] != 200:
+        # 保存失败数据
+        for comapny in json.loads(item['formdata']):
+            company_name = comapny['company_name']
+            t_lock.acquire()
+            with open(os.path.join(os.path.dirname(WORK_DIR), 'insert_fail_companies.txt'), 'a+',
+                      encoding='utf8') as f:
+                f.write(company_name + '\n')
+            t_lock.release()
+            logger.warning("%s数据插入失败，已保存至本地" % company_name)
+        item['formdata'].clear()
+        return None
+    item['formdata'].clear()
+    try:
+        logger.info("试存数: %s, 成功数: %s" % (item['crawl_count'], res['rows_count']))
+    except Exception as e:
+        logger.warning(e)
+    p_queue.put(item['crawl_count '])
 
 
     for back_file in file_list:

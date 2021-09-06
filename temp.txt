@@ -1,0 +1,7 @@
+'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+'Accept-Encoding': 'gzip, deflate',
+'Accept-Language': 'zh,zh-TW;q=0.9,en-US;q=0.8,en;q=0.7,zh-CN;q=0.6',
+'Cache-Control': 'max-age=0',
+'Connection': 'keep-alive',
+'Host': 'httpbin.org',
+'Upgrade-Insecure-Requests': '1',

@@ -447,6 +447,10 @@ cython_debug/
 /spiders/CompanyInfo/
 /spiders/CompanyUrls/
 /spiders/CompanyUrlsT/
+/spiders/fail_companies.txt/
+/spiders/no_companies.txt/
+/spiders/local_proxies.txt/
 /spiders/logs/
 /spiders/测试1.txt
 /.idea/
+/ProxyPool1/

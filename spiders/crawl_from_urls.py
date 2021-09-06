@@ -23,21 +23,21 @@ from multiprocessing import Pool as pPool
 
 
 # 线程数(同时消耗每个文件中的url数) 24
-THREAD_COUNT = 24
+THREAD_COUNT = 1
 # 进程数(一次使用的文件数) 2
-PROCESS_COUNT = 2
+PROCESS_COUNT = 1
 # 线程池缓冲数(线程流畅度) 10
-THREAD_P_WAIT_COUNT = THREAD_COUNT * 10
+THREAD_P_WAIT_COUNT = THREAD_COUNT * 1
 # 进程池缓冲数(进程流畅度) 32
-PROCESS_P_WAIT_COUNT = PROCESS_COUNT * 32
+PROCESS_P_WAIT_COUNT = PROCESS_COUNT * 1
 
 # 是否使用代理
 USE_PROXY = True
 # PROXIES_API是否可用
-USE_PROXY_API = False
+USE_PROXY_API = True
 # 代理接口，每2秒取一次，%s=[1,2,3,...]
-PROXIES_API = "http://http.tiqu.alibabaapi.com/getip?num=%s&type=2&pack=73571&port=11&lb=1&pb=45&regions="
-# PROXIES_API = "http://localhost:5555/get?count=%s"
+# PROXIES_API = "http://http.tiqu.alibabaapi.com/getip?num=%s&type=2&pack=73571&port=11&lb=1&pb=45&regions="
+PROXIES_API = "http://localhost:8790/get?count=%s"
 
 # >>>>>>>>>>>>>>>>>>>>>>
 # redis host
@@ -122,7 +122,7 @@ def get_api_proxy(count=None, api=None):
             logger.warning("接口ip已用完！！")
             return []
         if not js['data']:
-            logger.warning("接口ip已用完！！")
+            logger.warning("接口ip失效！！")
             return []
         for item in js['data']:
             proxy_list.append(item['ip'] + ':' + item['port'])
@@ -190,30 +190,41 @@ def crawl_url(url, item, file_name, t_lock, proxy=None):
     while error_count:
         if proxy:
             header['User-Agent'] = random.choice(ua_list)
-            html = requests.get(url, headers=header, proxies=proxy, timeout=5)
+            try:
+                html = requests.get(url, headers=header, proxies=proxy, timeout=8)
+            except Exception as e:
+                if "443" in str(e):
+                    rds_db.sadd("proxy443", proxy.split("//")[-1])
+                elif USE_PROXY_API:
+                    back_proxy(proxy.split('//')[-1], 200, t_lock)
+                logger.warning("error: %s" % e)
             if not html or html.status_code != 200:
                 if error_count > 1:
                     error_count -= 1
                     if USE_PROXY_API:
                         ip_list = get_api_proxy(1, PROXIES_API)
+                        if not ip_list:
+                            logger.warning("接口代理获取失败，已停用接口...")
+                            USE_PROXY_API = False
+                            continue
                     else:
                         ip_list = get_local_proxy(1)
-                    if ip_list:
-                        proxy = ip_list.pop()
-                    else:
-                        logger.warning("ip获取失败，请检查代理ip")
-                        ip_list = get_local_proxy(1)
-                        if ip_list:
-                            proxy = ip_list.pop()
+                        if not ip_list:
+                            logger.warning("本地代理获取失败，已起用接口...")
+                            USE_PROXY_API = True
+                            continue
+                    proxy = ip_list.pop()
                     continue
                 else:
                     logger.warning("抓取失败: %s" % url[:100])
                     store_url(WORK_DIR, FAIL_URLS, url, t_lock)
+                    if not USE_PROXY_API:
+                        USE_PROXY_API = True
                     break
             else:
                 if store_html(html, store_path, file_name, t_lock):
                     t_lock.acquire()
-                    item[0] += 1
+                    item['crawl_count'] += 1
                     t_lock.release()
                     if USE_PROXY_API:
                         back_proxy(proxy.split('//')[-1], 200, t_lock1)
@@ -225,7 +236,14 @@ def crawl_url(url, item, file_name, t_lock, proxy=None):
                     break
         else:
             header['User-Agent'] = random.choice(ua_list)
-            html = requests.get(url, headers=header, timeout=5)
+            try:
+                html = requests.get(url, headers=header, timeout=8)
+            except Exception as e:
+                if "HTTP" in str(e):
+                    rds_db.sadd("proxy443", proxy.split("//")[-1])
+                elif USE_PROXY_API:
+                    back_proxy(proxy.split('//')[-1], 200, t_lock)
+                logger.warning("error: %s" % e)
             if not html or html.status_code != 200:
                 if error_count > 1:
                     error_count -= 1
@@ -233,11 +251,13 @@ def crawl_url(url, item, file_name, t_lock, proxy=None):
                 else:
                     logger.warning("抓取失败: %s" % url[:100])
                     store_url(WORK_DIR, FAIL_URLS, url, t_lock)
+                    if not USE_PROXY_API:
+                        USE_PROXY_API = True
                     break
             else:
                 if store_html(html, store_path, file_name, t_lock1):
                     t_lock.acquire()
-                    item[0] += 1
+                    item['crawl_count'] += 1
                     t_lock.release()
 
 
@@ -279,7 +299,7 @@ def crawl_file(file, item, t_lock1, t_lock2):
                     t_pool = tPool(THREAD_COUNT)
                     for url, proxy in zip(urls[:urls_len], ip_list):
                         if rds_db.sadd(RDS_URLS, get_md5(url)):
-                            new_proxy = {'https:': 'https://' + proxy}
+                            new_proxy = {'http': 'http://' + proxy, 'https': 'https://' + proxy}
                             t_pool.apply_async(func=crawl_url, args=(url, item, file_name, t_lock2, new_proxy))
                         else:
                             if USE_PROXY_API:
@@ -305,7 +325,7 @@ def crawl_file(file, item, t_lock1, t_lock2):
 
 
 def crawl_files(url_files, p_queue):
-    item = [0]
+    item = {'crawl_count': 0}
     files = copy(url_files)
     t_lock1 = t_lock2 = tRLock()
     while True:
@@ -332,7 +352,7 @@ def crawl_files(url_files, p_queue):
             t_pool.join()
         else:
             break
-    p_queue.put(item[0])
+    p_queue.put(item['crawl_count'])
 
 
 # 回收代理
@@ -341,7 +361,7 @@ def back_proxy(proxy, status_code, lock):
     # 判断文件是否存在u，不存在则创建
     if not os.path.exists(store_path):
         os.makedirs(store_path)
-    if (status_code < 401 or status_code > 408) and status_code not in [302, 301]:
+    if status_code > 99 and status_code < 401 and status_code not in [301, 302]:
         # 回收
         lock.acquire()
         with open(os.path.join(store_path, "back_proxies.txt"), 'a+', encoding='utf-8') as f:

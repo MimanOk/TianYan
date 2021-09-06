@@ -20,19 +20,20 @@ from multiprocessing import Pool as pPool
 
 
 # 线程数 32
-THREAD_COUNT = 32
+THREAD_COUNT = 1
 # 进程数 2
-PROCESS_COUNT = 2
+PROCESS_COUNT = 1
 # 线程池缓冲数(线程流畅度) 10
-THREAD_P_WAIT_COUNT = THREAD_COUNT * 10
+THREAD_P_WAIT_COUNT = THREAD_COUNT * 1
 # 进程池缓冲数(进程流畅度) 32
-PROCESS_P_WAIT_COUNT = PROCESS_COUNT * 32
+PROCESS_P_WAIT_COUNT = PROCESS_COUNT * 1
 
 USE_PROXY = True
 # 接口ip是否能用
-USE_PROXY_API = False
+USE_PROXY_API = True
 # 代理接口
-PROXIES_API = "http://http.tiqu.alibabaapi.com/getip?num=%s&type=2&pack=73571&port=11&lb=1&pb=45&regions="
+# PROXIES_API = "http://http.tiqu.alibabaapi.com/getip?num=%s&type=2&pack=73571&port=11&lb=1&pb=45&regions="
+PROXIES_API = "http://localhost:8790/get?count=%s"
 # 一页最多采多少条url
 ONE_PAGE_URL = 1
 
@@ -68,7 +69,7 @@ REDIS_CHARSET = 'utf8'
 RDS_COMPANIES = "tianyan_companies"
 # redis数据库
 rds_db = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, charset=REDIS_CHARSET)
-# <<<<<<<<<<<<<<<<<<<<<<
+# <<<<<<<<<<<<<<<<<<<<<s<
 
 trace30 = logger.add(os.path.join(WORK_DIR, "logs", "TianYan.log"), rotation="500 MB", level=30)
 
@@ -125,13 +126,15 @@ def crawl_pages(company_name, pages, t_lock, item, start_proxy=None):
                             proxy_t = get_api_proxy(1, PROXIES_API)
                             if not proxy_t:
                                 logger.warning("代理接口没有ip或IP不足！！")
+                                logger.info("启用本地ip...")
                                 USE_PROXY_API = False
+                                error_count = ERROR_COUNT
                                 continue
                         else:
                             proxy_t = get_local_proxy(1)
                             if not proxy_t:
                                 logger.warning("本地文件没有ip或ip不足！！")
-                                logger.info("尝试接口ip...")
+                                logger.info("启用代理接口...")
                                 time.sleep(2)
                                 USE_PROXY_API = True
                                 continue
@@ -144,16 +147,22 @@ def crawl_pages(company_name, pages, t_lock, item, start_proxy=None):
                             return None
                         proxy = "https://" + proxy
                     proxies = {
-                        'https:': proxy,
+                        'http': proxy.replace('s', ''),
+                        'https': proxy,
                     }
+                    # proxies = {
+                    #     'no_proxy': proxy,
+                    # }
 
-                    html = session.get(url, timeout=5, proxies=proxies)
+                    html = session.get(url, timeout=8, proxies=proxies)
                 else:
-                    html = session.get(url, timeout=5)
+                    html = session.get(url, timeout=8)
             except Exception as e:
-                logger.warning("error: %s" % e)
-                if USE_PROXY_API:
+                if "HTTP" in str(e):
+                    rds_db.sadd("proxy443", proxy.split("//")[-1])
+                elif USE_PROXY_API:
                     back_proxy(proxy.split('//')[-1], 200, t_lock)
+                logger.warning("error: %s" % e)
             if not html:
                 if error_count > 1:
                     error_count -= 1
@@ -162,6 +171,9 @@ def crawl_pages(company_name, pages, t_lock, item, start_proxy=None):
                     logger.info("抓取失败: %s" % company_name)
                     store_company(WORK_DIR, FAIL_COMPANIES, company_name, t_lock)
                     have_data = False
+                    if not USE_PROXY_API:
+                        logger.info("启用代理接口...")
+                        USE_PROXY_API = True
             selector = parsel.Selector(html.text)
             # 提取第一层界面快照url
             url_list = selector.xpath("//a[contains(@class,'kuaizhao')]/@href").extract()
@@ -205,6 +217,9 @@ def crawl_pages(company_name, pages, t_lock, item, start_proxy=None):
                         logger.info("抓取失败: %s" % company_name)
                         store_company(WORK_DIR, FAIL_COMPANIES, company_name, t_lock)
                         have_data = False
+                        if not USE_PROXY_API:
+                            logger.info("启用代理接口...")
+                            USE_PROXY_API = True
                 else:
                     logger.info("无该公司：%s" % company_name)
                     store_company(WORK_DIR, NO_COMPANIES, company_name, t_lock)
@@ -216,7 +231,7 @@ def crawl_pages(company_name, pages, t_lock, item, start_proxy=None):
             headers['Referer'] = url
     if have_data:
         t_lock.acquire()
-        item[0] += 1
+        item['crawl_count'] += 1
         t_lock.release()
 
 
@@ -301,7 +316,7 @@ def back_proxy(proxy, status_code, t_lock):
     # 判断文件是否存在，不存在则创建
     if not os.path.exists(store_path):
         os.makedirs(store_path)
-    if (status_code < 401 or status_code > 408) and status_code not in [302, 301]:
+    if status_code > 99 and status_code < 401 and status_code not in [301, 302]:
         # 回收
         t_lock.acquire()
         with open(os.path.join(WORK_DIR, "back_proxies.txt"), 'a+', encoding='utf-8') as f:
@@ -318,7 +333,7 @@ def back_proxy(proxy, status_code, t_lock):
 def main(company_list, p_queue):
     global USE_PROXY_API
     crawl_page = 1
-    item = [0]
+    item = {"crawl_count": 0}
     company_list = copy(company_list)
 
     t_lock = tRLock()
@@ -336,11 +351,12 @@ def main(company_list, p_queue):
                 ip_list = get_api_proxy(company_count, PROXIES_API)
                 if not ip_list or len(ip_list) < company_count:
                     logger.warning("代理接口没有ip或IP不足！！")
+                    logger.info("启用本地ip...")
                     USE_PROXY_API = False
                     if ip_list:
                         for ip in ip_list:
                             back_proxy(ip, 200, t_lock)
-                    return None
+                    continue
             else:
                 # 根据要抓取的公司数从本地获取等量ip
                 ip_list = get_local_proxy(company_count, LOCAL_PROXY_PATH)
@@ -349,7 +365,7 @@ def main(company_list, p_queue):
                     time.sleep(2)
                     logger.info("尝试接口ip...")
                     USE_PROXY_API = True
-                    return None
+                    continue
             for i in range(company_count):
                 try:
                     new_company = company_list.pop().strip()
@@ -369,7 +385,7 @@ def main(company_list, p_queue):
             t_pool.join()
         else:
             break
-    p_queue.put(item[0])
+    p_queue.put(item['crawl_count'])
 
 
 def monitor(p_queue):
@@ -400,69 +416,69 @@ if __name__ == '__main__':
     t = Thread(target=monitor, args=(p_queue,))
     t.start()
 
-    while True:
-        cursor = 0
-        # 本地文件数据
-        with open(os.path.join(WORK_DIR, "测试1.txt"), 'r+', encoding='utf-8', errors='ignore') as f:
-            company_list = f.readlines()
-        if company_list:
-            company_counts = len(company_list)
-            try:
-                while_1 = 0
-                while True:
-                    # 进程池
-                    p_pool = pPool(PROCESS_COUNT)
-                    for i in range(PROCESS_P_WAIT_COUNT):
-                        if company_counts - cursor >= THREAD_P_WAIT_COUNT:
-                            companies = company_list[cursor:cursor + THREAD_P_WAIT_COUNT]
-                            p_pool.apply_async(func=main, args=(companies, p_queue))
-                            cursor += THREAD_P_WAIT_COUNT
-                        else:
-                            companies = company_list[cursor:]
-                            p_pool.apply_async(func=main, args=(companies, p_queue))
-                            while_1 = 1
-                            break
-                    p_pool.close()
-                    p_pool.join()
-                    if while_1:
-                        break
-            except Exception as e:
-                logger.warning(e)
-                break
+    # while True:
+    #     cursor = 0
+    #     # 本地文件数据
+    #     with open(os.path.join(WORK_DIR, "测试1.txt"), 'r+', encoding='utf-8', errors='ignore') as f:
+    #         company_list = f.readlines()
+    #     if company_list:
+    #         company_counts = len(company_list)
+    #         try:
+    #             while_1 = 0
+    #             while True:
+    #                 # 进程池
+    #                 p_pool = pPool(PROCESS_COUNT)
+    #                 for i in range(PROCESS_P_WAIT_COUNT):
+    #                     if company_counts - cursor >= THREAD_P_WAIT_COUNT:
+    #                         companies = company_list[cursor:cursor + THREAD_P_WAIT_COUNT]
+    #                         p_pool.apply_async(func=main, args=(companies, p_queue))
+    #                         cursor += THREAD_P_WAIT_COUNT
+    #                     else:
+    #                         companies = company_list[cursor:]
+    #                         p_pool.apply_async(func=main, args=(companies, p_queue))
+    #                         while_1 = 1
+    #                         break
+    #                 p_pool.close()
+    #                 p_pool.join()
+    #                 if while_1:
+    #                     break
+    #         except Exception as e:
+    #             logger.warning(e)
+    #             break
 
     # 接口数据
-    # data_url = "http://192.168.21.33:19980/tyc/list_only?number=%s"
-    # error_count = 0
-    # while True:
-    #     try:
-    #         # 进程池
-    #         p_pool = pPool(PROCESS_COUNT)
-    #         companies_list = []
-    #         for i in range(PROCESS_P_WAIT_COUNT):
-    #             datas = requests.get(data_url % THREAD_P_WAIT_COUNT).json()
-    #             if datas['code'] != 200:
-    #                 logger.info(datas)
-    #                 error_count += 1
-    #                 continue
-    #             if datas['data']:
-    #                 error_count = 0
-    #                 for company in datas['data']:
-    #                     companies_list.append(company['company_name'])
-    #                 p_pool.apply_async(func=main, args=(companies_list, p_queue))
-    #             else:
-    #                 logger.warning("未从接口提取到公司名，请检查接口是否可用.")
-    #                 error_count += 1
-    #                 if error_count >= 50:
-    #                     send_email("程序因未从接口获取到数据而被迫终止", 2)
-    #                     logger.error("接口无数据，退出程序.")
-    #                     break
-    #         p_pool.close()
-    #         p_pool.join()
-    #         if error_count >= 50:
-    #             break
-    #     except Exception as e:
-    #         logger.warning(e)
-    #         break
+    data_url = "http://192.168.21.33:19980/tyc/list_only?number=%s"
+    error_count = 0
+    while True:
+        try:
+            # 进程池
+            p_pool = pPool(PROCESS_COUNT)
+            companies_list = []
+            for i in range(PROCESS_P_WAIT_COUNT):
+                datas = requests.get(data_url % THREAD_P_WAIT_COUNT).json()
+                if datas['code'] != 200:
+                    logger.info(datas)
+                    error_count += 1
+                    continue
+                if datas['data']:
+                    error_count = 0
+                    for company in datas['data']:
+                        companies_list.append(company['company_name'])
+                    p_pool.apply_async(func=main, args=(companies_list, p_queue))
+                else:
+                    logger.warning("未从接口提取到公司名，请检查接口是否可用.")
+                    error_count += 1
+                    if error_count >= 50:
+                        send_email("程序因未从接口获取到数据而被迫终止", 2)
+                        logger.error("接口无数据，退出程序.")
+                        break
+            p_pool.close()
+            p_pool.join()
+            if error_count >= 50:
+                break
+        except Exception as e:
+            logger.warning(e)
+            break
 
     # 结束信号
     p_queue.put('end')

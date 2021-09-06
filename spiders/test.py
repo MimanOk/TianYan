@@ -4,7 +4,26 @@ __author__ = "huoyijun"
 
 import re
 import os
+import redis
+import random
 from loguru import logger
+
+WORK_DIR = os.getcwd()
+
+# >>>>>>>>>>>>>>>>>>>>>>
+# redis host
+REDIS_HOST = 'localhost'
+# redis port
+REDIS_PORT = 6379
+# redis db
+REDIS_DB = 0
+# redis charset
+REDIS_CHARSET = 'utf8'
+# url去重
+RDS_URLS = "tianyan_urls"
+# redis数据库
+rds_db = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, charset=REDIS_CHARSET)
+# <<<<<<<<<<<<<<<<<<<<<<
 
 
 def safedecode(data, charset='utf-8', sep='#'):
@@ -84,7 +103,31 @@ def safedecode(data, charset='utf-8', sep='#'):
     return ''.join(result)
 
 
-with open("C:\\Users\\admin\\Desktop\\zhuruidong\\virtualenv\\HuangYe\\crawl_huangye\\BackCompany\\上海启谷网络科技有限公司.txt",
-          'rb') as f:
-    res = f.read()
-    print(res)
+# 获取本地代理
+def get_local_proxy(path=None):
+    if not path:
+        path = os.path.join(WORK_DIR, "local_proxies.txt")  # 默认本地代理路径
+    elif not os.path.exists(path):  # 判断文件是否存在，不存在则返回1
+        logger.warning("proxies file '%s' not exists !" % path)
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            proxies = f.readlines()
+    except Exception as e:
+        logger.warning(e)
+        return []
+    if proxies:
+        for proxy in proxies:
+            proxy = re.compile(r'\d{1,3}.\d{1,3}.\d{1,3}.\d{1,3}:\d{1,5}').search(proxy)
+            if proxy:
+                try:
+                    rds_db.rpush("proxies", proxy.group(0).strip())
+                except Exception as e:
+                    logger.info(e)
+    else:
+        logger.warning("local proxy is empty !    '%s'" % path)
+        return []
+
+
+if __name__ == '__main__':
+    get_local_proxy()
